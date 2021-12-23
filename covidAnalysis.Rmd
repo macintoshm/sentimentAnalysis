@@ -1,0 +1,208 @@
+---
+title: "How did students view online classes? "
+output: html_notebook
+---
+
+# Mackenzie Myers
+## PLSC 497 Final Project
+
+After COVID I have become aware of one "controversial" topic: Holding classes online. Everyone has their own opinion, and usually this opinion is a strong one. Rarely have I met someone who is impartial to having class on ZOOM or not. You either love it or hate it. 
+
+Because of this, I thought it would make for an interesting research question to see if I can figure out whether most people like or dislike online classes. It is also a question that relates heavily to all of us as students and teachers. 
+
+I personally disliked online classes, I feel I did not learn well in them, and they did not have the same quality of education that in person class has. From speaking with friends I feel like the majority of people felt the same way. Therefore, my hypothesis is that most students feel negatively about online class. 
+
+We will test this hypothesis in the below code using several natural langauge processing modeling techniques. I chose Twitter as my data source firstly because of ease of use. We learned how to use it in class and there’s existing R packages that work well with the Twitter API. Secondly, I feel that Twitter users will closely resemble the target audience I am looking for data from, which is high school and college age students. 
+
+
+## Creating Dataset
+
+The below chunk of code is the main way I gathered tweets. A token is made and then I searched terms on twitter to find relevant tweets. Some search terms I used were: 
+
+"online class" 
+"zoom class" 
+"online classes" 
+"zoom classes" 
+
+
+```{r}
+library(rtweet)
+library(data.table)
+
+app_name <- "smapp"
+
+consumer_key <- "5y3RgYfTUOUWOGheskv4p7WWO"
+consumer_secret <- "j5pszDQ4bddt4pLiwqwezuETPYi3f1PyugM3L4eJdxUVsdwIco"
+
+access_token <- "89098361-YS0MquarADIDh5XvrMdMzASxzxy3apOEgzTpKZvPY"
+access_secret <- "jhZgEZuBS1mzDvMIRAhjNb9aklVN4S6UoCP7eL8l3GGIM"
+
+
+## create token
+token <- create_token(
+  app = app_name,
+  consumer_key = consumer_key,
+  consumer_secret = consumer_secret,
+  access_token = access_token,
+  access_secret = access_secret
+)
+## print token
+token
+
+get_token() 
+
+#####################
+### Search tweets
+#####################
+
+rt <- search_tweets(
+  "online class", n = 15000, include_rts = FALSE, token = token, lang = "en"
+)
+
+#write the tweets to a CSV to store all the tweets I've collected
+fwrite(rt, "onlineclasstweets.csv", append = TRUE)
+
+```
+
+## Preprocessing
+
+The below chunk of code is taking all of the tweets I have collected and cleaning them. A lot of 'junk' tweets were found by spam accounts trying to sell online classes. I made the observation that most of these "junk" tweets have exterior URLs in them. Because of that I aimed to filter out a lot of these 'junk' tweets by removing any tweets that have an outside link in them. I also made the decision to filter out any tweets that contain the word 'pay,' because another trend I noticed is that the junk tweets contain the word pay or #pay. I would rather filter out too many junk tweets and risk filtering out a few normal tweets, than not filter out enough junk tweets and get a bad analysis. 
+
+```{r}
+library(data.table)
+#load in the CSV file
+tweets <- fread("onlineclasstweets.csv")
+
+#get rid of possible duplicate tweets
+tweets <- tweets[!duplicated(tweets), ]
+
+#get rid of tweets that are not in english 
+tweets <- tweets[tweets$lang == "en",]
+
+#A lot of junk tweets are still present in the data table. They are by spam accounts or they are trying to sell some sort of online class.  
+#Remove any tweets that have an outside link in them. 
+tweets <- tweets[tweets$urls_url == "",]
+
+#This was another preprocessing step I added to get rid of junk spam tweets. I noticed a lot of them use 'pay' in their tweets and #pay
+tweets <- tweets[!grepl("pay", tweets$text), ]
+tweets <- tweets[!grepl("Pay", tweets$text), ]
+
+fwrite(tweets, "cleanedTweets.csv")
+```
+
+## Model 1: Sentiment Score
+
+The below code uses a bag of words approach to finding positive or negative sentiment in the mined Tweets. I used the already developed Hu and Liu sentiment lexicon. This is my main method of deciding whether online classes are viewed as positive or negative. 
+
+```{r}
+library("quanteda")
+library("quanteda.textmodels")
+library("tidyverse")
+library("data.table")
+library("ggplot2")
+
+tweets <- fread("cleanedTweets.csv")
+
+in_path <- "" # add your own ppath
+pos <- read.table(paste0(in_path, "positive-words.txt"), stringsAsFactors = F) # read in the files
+neg <- read.table(paste0(in_path, "negative-words.txt"), stringsAsFactors = F)
+
+sentiment_dict <- dictionary(list(pos = pos$V1, neg = neg$V1)) # create dictionary object (a quanteda object)
+
+#create my corpus and DFM
+tweetsCorpus <- corpus(tweets$text)
+
+tweetDFM <- dfm(tweetsCorpus, stem = T, 
+                remove_punct = T, 
+                remove = stopwords("english"))
+
+posNegCounts <- dfm_lookup(tweetDFM, sentiment_dict)
+
+posNegCounts <- convert(posNegCounts, to = c("data.frame"))
+
+posNegCounts$diff <- posNegCounts$pos - posNegCounts$neg
+
+ggplot(data=posNegCounts, aes(x = posNegCounts$diff)) + geom_histogram()
+
+# posNegCounts$label  <- ifelse(posNegCounts$diff >= 1, "positive", "negative")
+# 
+# totals <- posNegCounts %>% group_by(label) %>% summarize(n())
+# setnames(totals, "n()", "n")
+# ggplot(data=totals, aes(x = label, y = n)) + geom_bar(stat="identity")
+
+```
+In the above bar graph, I realized that a positive negative difference of 0 was what most of the tweets had and why so many of them were marked positive. If I changed that to greater than or equal to 1 instead of 0, suddenly the bars were reversed and negative had more. Instead I decided to plot the positive negative differences histogram to see the counts of each difference and see their distribution.
+
+After plotting this histogram, you can see the majority of tweets have 0 difference. However, more tweets lie on the positive side than the negative side, so the data is still slightly skewed positively.
+
+
+## Model 2: Structural Topic Model
+```{r}
+set.seed(9004)
+libraries <- c("ldatuning", "topicmodels", "ggplot2", "dplyr", "rjson", "quanteda", "lubridate", "parallel", "doParallel", "tidytext", "stringi", "tidyr", "stm")
+lapply(libraries, require, character.only = TRUE)
+
+tweetsCorpus <- corpus(tweets$text)
+
+tweetDFM <- dfm(tweetsCorpus, stem = T, 
+                remove_punct = T, 
+                remove = stopwords("english"))
+
+
+k_optimize <- FindTopicsNumber(
+  tweetDFM,
+  topics = seq(from = 5, to = 10, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 2017),
+  mc.cores = detectCores(), # to usa all cores available
+  verbose = TRUE
+)
+
+#Find the best k. I chose 7 
+FindTopicsNumber_plot(k_optimize)
+
+#Create the STM - this takes a few minutes to run 
+twitter_stm <- stm(tweetDFM, K = 7, init.type = "Spectral", max.em.its = 10)
+
+#Plot my graphs
+plot(twitter_stm, type = "summary")
+plot(twitter_stm, type="perspectives", topics = c(5, 6))
+plot(twitter_stm, type = "labels")
+
+```
+
+## Model 3: Topics using LDA
+```{r}
+library(ldatuning)
+
+k <- 7
+tweets_TM <- LDA(tweetDFM, k = k, method = "Gibbs",  control = list(seed = 10012))
+
+tweets_TM@loglikelihood
+
+
+topTerms<- get_terms(tweets_TM, k = 7)
+topTerms
+
+doc_topics <- tweets_TM@gamma
+
+# Store the results of words over topics
+words_topics <- tweets_TM@beta
+```
+
+
+After using the above two methods to try to find topics and their most frequent terms, unfortunately I didn't see much usefulness for the sake of our research question in the topics found. However my first chart, plotting the counts of positive and negative difference, was very useful.
+
+In my opinion, having a positive negative sentiment difference of only 1 is not great enough to determine if the tweet was positive or negative enough to label it as such. Therefore I decided to count all tweets with a positive negative difference of -2 or less, or 2 and greater. 
+
+```{r}
+
+negativeTotal <- posNegCounts %>% filter(diff <= -2) %>% dplyr::summarise(n())
+positiveTotal <- posNegCounts %>% filter(diff >= 2) %>% dplyr::summarise(n())
+
+totals <- c(negativeTotal, positiveTotal)
+totals
+```
+
+After applying this simplification you can see that there is more tweets with a positive sentiment score than negative sentiment score. Therefore we can conclude from our research that online class was viewed slightly more positively than negatively. 
